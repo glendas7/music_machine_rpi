@@ -1,93 +1,90 @@
-from gpiozero import TonalBuzzer, LED, Button
+from ADCDevice import *
+import firebase_setup
+from firebase_admin import firestore
+from gpiozero import TonalBuzzer, LED
 from gpiozero.tones import Tone
-import firebase_admin
-from firebase_admin import credentials, firestore
 from signal import pause
+from time import sleep
 import constant
-from time import *
-import time
 
-cred = credentials.Certificate("./serviceAccountKey.json")
-firebase_admin.initialize_app(cred)
+potA = ADCDevice()
+potA = ADS7830()    
+notes = ["G4", "G#4", "A4","A#4","C5", "C#5", "D5", "D#5", "E5", "F5", "F#5", "G5", "G#5", "A5"]
+frequencies = [392, 415, 440, 466, 523, 554, 587, 622, 659, 698, 740, 783, 831, 880]
+powerLed = LED(21)
+t = TonalBuzzer(13)
+power = True
+valueA = 0
+button = "off"
+
 db = firestore.client()
+collection = firebase_setup.db.collection(constant.COLLECTION_NAME)
+doc_freq_data_ref = collection.document(constant.FREQ_DATA)
+doc_note_data_ref = collection.document(constant.NOTE_DATA)
+doc_led_data_ref = collection.document(constant.LED_DATA)
+doc_button_data_ref = collection.document(constant.BUTTON_DATA)
 
-t = TonalBuzzer(26)
-v1 = ["G4", "G4", "G4", "D4", "E4", "E4", "D4"]
-v2 = ["B4", "B4", "A4", "A4", "G4"]
-v3 = ["D4", "G4", "G4", "G4", "D4", "E4", "E4", "D4"]
-song = [v1,v2,v3,v2]
+doc_note_data_ref.update({u'note':"off"})
+doc_freq_data_ref.update({u'frequency': "off"})
+doc_led_data_ref.update({u'potOff': True})
+doc_button_data_ref.update({u'powerButton': "off"})
 
-a = LED(22)
-b = LED(27)
-c = LED(17)
-d = LED(4)
-e = LED(18)
-f = LED(23)
-g = LED(24)
-h = LED(25)
-i = LED(12)
-j = LED(21)
+powerLed.on()
 
-greenLed = LED(19)
+def end():
+    potA.close()
 
-leds = [a,b,c,d,e,f,g,h,i,j]
+def checkNote(myNote):
+    for note, freq in zip(notes, frequencies):
+        if myNote == note:
+            doc_freq_data_ref.update({u'frequency': freq})
+            t.play(myNote)
 
-for led in leds:
-            led.off()
-
-def on_timedatadoc_snapshot(doc_snapshot, changes, read_time):
+def on_notedoc_snapshot(doc_snapshot):
     for doc in doc_snapshot:
-        print(f'Received document snapshot: {doc.to_dict()}')
-        alarm_status = doc.to_dict()["alarm"]
-        timer_status = doc.to_dict()["timeLeft"]
-        print(f'alarm {alarm_status}')
-        print(f'timeLeft {timer_status}')
-        if timer_status != None:
-            if timer_status > 10:
-                blinkGreen()
-        if timer_status == 10:
-            a.on()
-        if timer_status == 9:
-            b.on()
-        if timer_status == 8:
-            c.on()
-        if timer_status == 7:
-            d.on()
-        if timer_status == 6:
-            e.on()
-        if timer_status == 5:
-            f.on()
-        if timer_status == 4:
-           g.on()
-        if timer_status == 3:
-            h.on()
-        if timer_status == 2:
-            i.on()
-        if timer_status == 1:
-           j.on()
-        if timer_status == 0:
-            soundBuzzer()            
-        
-doc_timedata_ref = db.collection(constant.COLLECTION_NAME).document(constant.TIMEDATA)
-doc_timedata_watch = doc_timedata_ref.on_snapshot(on_timedatadoc_snapshot)
+        note_name = doc.to_dict()["note"]
+        if note_name != "off":
+            checkNote(note_name)
+            
+def on_leddoc_snapshot(doc_snapshot):
+    for doc in doc_snapshot:
+        led = doc.to_dict()["potOff"]
+        global power
+        if led == True:
+            power = False
+            powerLed.off()
+        else:
+            power = True
+            powerLed.on()
 
-doc_timedata_ref.update({u'timeLeft': None})
-doc_timedata_ref.update({u'alarm': None})
+def on_buttondoc_snapshot(doc_snapshot):
+    for doc in doc_snapshot:
+        global button
+        button = doc.to_dict()["powerButton"]
+            
+doc_note_ref = collection.document(constant.NOTE_DATA)
+doc_note_watch = doc_note_ref.on_snapshot(on_notedoc_snapshot)
+doc_led_ref = collection.document(constant.LED_DATA)
+doc_led_watch = doc_led_ref.on_snapshot(on_leddoc_snapshot)
+doc_button_ref = collection.document(constant.BUTTON_DATA)
+doc_button_watch = doc_button_ref.on_snapshot(on_buttondoc_snapshot)
 
-def blinkGreen():
-    greenLed.on()
-    sleep(.5)
-    greenLed.off()  
-
-def soundBuzzer():
-    print("BUZZ")
-    for led in leds:
-            led.off()
-    for verse in song:
-        for note in verse:
-            t.play(note)
-            sleep(0.4)
-            t.stop()
-            sleep(0.1)
-        sleep(0.2)
-pause()
+print ('Program is starting ... ')
+while True:
+    valueA = potA.analogRead(0) + 500
+    voltageA = valueA / 255.0 * 3.3 
+    if button == "on":
+        try:
+            if power == True:
+                t.play(Tone(valueA))
+                doc_freq_data_ref.update({u'frequency': valueA})
+                potFreq = valueA
+        except KeyboardInterrupt:
+            t.stop
+            powerLed.off()
+            end()
+            pause()
+        except:
+            print("None")
+    else:
+        t.stop()
